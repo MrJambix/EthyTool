@@ -1128,10 +1128,14 @@ class EthyToolConnection:
             return self._profile_cache
         detected = self.detect_class().lower().replace(" ", "_")
         if not detected or detected == "unknown": return None
+        lib_dir = Path(__file__).parent
         search = [
-            Path(__file__).parent / "builds" / f"{detected}.py",
-            Path(__file__).parent.parent / "builds" / f"{detected}.py",
-            Path(__file__).parent / f"{detected}.py",
+            lib_dir / "builds" / f"{detected}.py",
+            lib_dir / "scripts" / "builds" / f"{detected}.py",
+            lib_dir / "scripts" / f"{detected}.py",
+            lib_dir.parent / "builds" / f"{detected}.py",
+            lib_dir.parent / "scripts" / "builds" / f"{detected}.py",
+            lib_dir / f"{detected}.py",
         ]
         for path in search:
             if path.exists():
@@ -1140,10 +1144,13 @@ class EthyToolConnection:
                     mod = importlib.util.module_from_spec(spec)
                     spec.loader.exec_module(mod)
                     self._profile_cache = mod
-                    self.log(f"Loaded build: {detected} from {path.name}")
+                    self.log(f"Loaded build: {detected} from {path}")
                     return mod
                 except Exception as e:
                     self.log(f"Failed to load {path}: {e}")
+        self.log(f"⚠ No profile found for '{detected}'. Searched:")
+        for p in search:
+            self.log(f"  {p}")
         return None
 
     def get_spell_info(self, name):
