@@ -1,7 +1,10 @@
 # EthyTool
 
-Hit that Start Button if you enjoy this! 
+Hit that Star Button if you enjoy this! 
+
 Hit Pull Request to merge your scripts/updates!
+
+Work in Progress
 
 A modding and scripting toolkit for Ethyrial: Echoes of Yore. Read game data, interact with entities, build overlays, track stats, create custom tools — all through a simple Python API.
 
