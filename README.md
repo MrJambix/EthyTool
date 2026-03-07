@@ -2,29 +2,6 @@
 
 A modding and scripting toolkit for Ethyrial: Echoes of Yore. Read game data, interact with entities, build overlays, track stats, create custom tools — all through a simple Python API.
 
-## What Can You Build?
-
-- **DPS Meter** — track damage per second from combat logs
-- **Stat Overlay** — live HP/MP/Gold display outside the game
-- **Loot Logger** — record every drop with timestamps
-- **Gathering Tracker** — count nodes harvested per session
-- **Kill Counter** — track kills by mob type
-- **Gold/Hour Calculator** — monitor income over time
-- **Inventory Alert** — notify when an item drops or runs out
-- **Spell Cooldown Tracker** — external cooldown display
-- **Nearby Entity Radar** — see what's around you in a list
-- **Boss HP Tracker** — monitor boss health in real time
-- **Node Scanner** — find all gathering nodes and their states
-- **Equipment Logger** — track gear upgrades over time
-- **Death Tracker** — log where and when you die
-- **Session Stats** — full summary of a play session
-- **Map Marker Tool** — record coordinates of points of interest
-- **Price Checker** — track item counts for trading
-- **Party Monitor** — watch friendly target health
-- **AFK Alert** — detect when you stop moving
-- **Camera Tool** — read and log camera angles
-- **Custom Macros** — chain any game actions together
-
 ## Requirements
 
 - **Windows 10/11**
