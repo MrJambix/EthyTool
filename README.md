@@ -1,6 +1,6 @@
 # EthyTool
 
-Hit that Star Button if you enjoy this! 
+Hit that Star Button if you enjoy this!
 
 Hit Pull Request to merge your scripts/updates!
 
@@ -8,9 +8,15 @@ Work in Progress
 
 A modding and scripting toolkit for Ethyrial: Echoes of Yore. Read game data, interact with entities, build overlays, track stats, create custom tools — all through a simple Python API.
 
+---
+
 ## Key Required
 
 **A key is required to use EthyTool.** On first launch you will be prompted to enter your key. Reach out to **MrJambix** on Discord for a key.
+
+Keys are validated locally inside the EXE — no internet connection or server required at launch.
+
+---
 
 ## Requirements
 
@@ -19,17 +25,25 @@ A modding and scripting toolkit for Ethyrial: Echoes of Yore. Read game data, in
   - During install, check **"Add Python to PATH"**
 - **Ethyrial: Echoes of Yore**
 
+---
+
 ## Setup
 
 1. Download the latest release
 2. Extract to any folder
 3. Install Python if you haven't already
-4. **Get a key** — reach out to **MrJambix** on Discord
-5. Launch the game
-6. Run `EthyTool.exe`
-7. Enter your key when prompted
-8. Click **Inject**
-9. Open the Scripts tab and run scripts
+4. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+5. **Get a key** — reach out to **MrJambix** on Discord
+6. Launch the game
+7. Run `EthyTool.exe`
+8. Enter your key when prompted
+9. Click **Inject**
+10. Open the Scripts tab and run scripts
+
+---
 
 ## What Can You Do?
 
@@ -115,6 +129,8 @@ cam = camera()
 print(f"Zoom: {cam['distance']}  Angle: {cam['angle']}  Pitch: {cam['pitch']}")
 ```
 
+---
+
 ## Writing Scripts
 
 Scripts go in the `scripts/` folder. Two ways to use the API:
@@ -140,6 +156,8 @@ spells = conn.get_spells()
 for s in spells:
     print(f"  {s['display']}  CD: {s['cur_cd']}s  Mana: {s['mana']}")
 ```
+
+---
 
 ## Quick Reference
 
@@ -171,27 +189,83 @@ for s in spells:
 
 Full reference: [docs/WRAPS.md](docs/WRAPS.md)
 
-## Folder Structure
+---
 
+## Global Hotkeys
+
+Once the Dashboard is connected to the game, these hotkeys work system-wide — even while the game window is focused:
+
+| Key | Action |
+|-----|--------|
+| **F5** | Stop all running scripts immediately |
+| **F6** | Pause / Resume all running scripts |
+
+Hotkeys are registered automatically on connect and unregistered cleanly when the Dashboard closes.
+
+---
+
+## Screen Reader & Computer Vision
+
+`ScreenReader` lets scripts capture the game screen and do template matching — useful for reading UI elements the API doesn't expose directly.
+
+```python
+from ethytool_lib import ScreenReader
+
+sr = ScreenReader()
+
+# Screenshot the game window (uses mss for ~5ms capture)
+frame = sr.screenshot()
+
+# Find an image on screen — returns (x, y, confidence) or None
+match = sr.find_image("templates/health_low.png", threshold=0.80)
+if match:
+    x, y, conf = match
+    print(f"Found at ({x}, {y})  confidence={conf:.2f}")
 ```
-EthyTool/
-├── EthyTool.exe              run this
-├── EthyTool.dll              auto-injected
-├── lib/
-│   ├── ethytool_lib.py       low-level API
-│   └── ethytool_wraps.py     simple API
-├── scripts/                  your scripts go here
-│   ├── combat.py
-│   ├── harvest.py
-│   ├── auto_loot.py
-│   └── rotations/
-│       ├── template.py       copy and rename for your class
-│       └── ...
-└── docs/
-    ├── WRAPS.md              wraps reference
-    ├── COMMANDS.md            raw DLL commands
-    └── SCRIPTING.md           how to write scripts
+
+**How it works:**
+- Uses **mss** for ultra-fast screen capture (~5ms vs ~100ms with PIL)
+- Uses **pywin32** to find and lock onto the Ethyrial game window automatically — captures only that window, not your whole screen
+- Falls back to full-desktop capture if the game window isn't found
+- Uses **OpenCV** for template matching
+
+**Install dependencies** (already included in `requirements.txt`):
+```bash
+pip install mss pywin32 opencv-python Pillow
 ```
+
+---
+
+## Process Monitoring
+
+EthyTool automatically watches the injected game process. If the game crashes or is closed:
+
+- All running scripts are stopped immediately
+- The Dashboard status updates to **"Game Closed"**
+- A log entry is written with a timestamp
+
+No manual cleanup needed — your scripts won't hang if the game dies unexpectedly.
+
+Powered by **psutil**.
+
+---
+
+## DPS Dashboard
+
+The built-in DPS Dashboard (`scripts/dps_dashboard.py`) tracks your damage output in real time and renders live charts.
+
+```bash
+# Run from the Scripts tab in EthyTool, or directly:
+python scripts/dps_dashboard.py
+```
+
+Features:
+- Live DPS graph per class/build
+- Session recording — saves to `scripts/sessions/`
+- Compare multiple sessions side-by-side
+- Powered by **matplotlib** and **numpy**
+
+---
 
 ## Combat Rotations
 
@@ -199,6 +273,61 @@ EthyTool/
 2. Rename to your class (e.g. `warrior.py`)
 3. Fill in your spell names
 4. Run `combat.py` — it detects your class and loads the rotation
+
+---
+
+## Python Dependencies
+
+All dependencies are bundled inside `EthyTool.exe`. If running scripts directly (not through the EXE), install with:
+
+```bash
+pip install -r requirements.txt
+```
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `pyyaml` | ≥6.0 | Config file loading |
+| `opencv-python` | ≥4.8 | Template matching / computer vision |
+| `mss` | ≥9.0 | Fast screen capture (~5ms, multi-monitor) |
+| `Pillow` | ≥10.0 | Image utilities, screenshot fallback |
+| `numpy` | ≥1.24 | Array processing for screen capture & DPS charts |
+| `matplotlib` | ≥3.7 | DPS Dashboard live charts |
+| `pywin32` | ≥306 | Win32 API — reliable game window detection |
+| `keyboard` | ≥0.13 | Global hotkeys (F5/F6) — work even in-game |
+| `psutil` | ≥5.9 | Process monitoring — auto-stop on game crash |
+| `pydantic` | ≥2.0 | Bot profile/config validation |
+| `watchdog` | ≥3.0 | Hot reload — edit scripts without restarting |
+| `rich` | ≥13.0 | CLI output formatting |
+| `typer` | ≥0.9 | CLI command interface |
+
+---
+
+## Folder Structure
+
+```
+EthyTool/
+├── EthyTool.exe              run this
+├── EthyTool.dll              auto-injected
+├── server_config.yaml        token list (keys validated locally)
+├── requirements.txt          Python dependencies
+├── lib/
+│   ├── ethytool_lib.py       low-level API + ScreenReader
+│   └── ethytool_wraps.py     simple API
+├── scripts/                  your scripts go here
+│   ├── combat.py
+│   ├── harvest.py
+│   ├── auto_loot.py
+│   ├── dps_dashboard.py      live DPS charts
+│   └── rotations/
+│       ├── template.py       copy and rename for your class
+│       └── ...
+└── docs/
+    ├── WRAPS.md              wraps reference
+    ├── COMMANDS.md           raw DLL commands
+    └── SCRIPTING.md          how to write scripts
+```
+
+---
 
 ## Links
 

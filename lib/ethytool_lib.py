@@ -10,6 +10,7 @@ import ctypes
 import ctypes.wintypes
 import importlib.util
 from pathlib import Path
+from typing import Optional
 
 
 # ══════════════════════════════════════════════════════════════
@@ -230,7 +231,7 @@ class EthyToolConnection:
     #  connect / disconnect / reconnect
     # ──────────────────────────────────────────────────────────
 
-    def connect(self, timeout=30):
+    def connect(self, timeout: int = 30) -> bool:
         start = time.time()
         while time.time() - start < timeout:
             if self._pid:
@@ -339,26 +340,6 @@ class EthyToolConnection:
     def get_speed(self):       return self._float(self._send("PLAYER_SPEED"))
     def get_direction(self):   return self._int(self._send("PLAYER_DIRECTION"))
 
-    def get_current_move_speed(self): return self._float(self._send("PLAYER_CUR_MOVE_SPEED"))
-    def get_attack_speed_left(self):  return self._float(self._send("PLAYER_ATK_SPEED_LEFT"))
-    def get_move_speed_forward(self): return self._float(self._send("PLAYER_MOVE_SPEED_FWD"))
-    def get_move_speed_right(self):   return self._float(self._send("PLAYER_MOVE_SPEED_RIGHT"))
-    def get_move_state(self):         return self._int(self._send("PLAYER_MOVE_STATE"))
-    def get_death_timer(self):        return self._float(self._send("PLAYER_DEATH_TIMER"))
-
-    def get_last_position(self):
-        r = self._send("PLAYER_LAST_POS")
-        if not r: return (0.0, 0.0, 0.0)
-        p = r.split(",")
-        if len(p) < 3: return (0.0, 0.0, 0.0)
-        return (float(p[0]), float(p[1]), float(p[2]))
-
-    def get_movement_data(self):
-        """PLAYER_MOVEMENT: full movement snapshot — pos, last_pos, speeds, state, frozen."""
-        r = self._send("PLAYER_MOVEMENT")
-        if not r or r in ("NO_PLAYER", "NOT_INITIALIZED"): return {}
-        return self._parse_kv(r)
-
     def move_to_target(self):
         r = self._send("MOVE_TO_TARGET")
         return r is not None and "OK" in r
@@ -374,6 +355,59 @@ class EthyToolConnection:
     def is_near(self, x, y, radius=5):
         return self.distance_to(x, y) <= radius
 
+    def get_last_position(self):
+        """PLAYER_LAST_POS: the position recorded on the previous tick (x, y, z)."""
+        r = self._send("PLAYER_LAST_POS")
+        if not r: return (0.0, 0.0, 0.0)
+        p = r.split(",")
+        if len(p) < 3: return (0.0, 0.0, 0.0)
+        return (float(p[0]), float(p[1]), float(p[2]))
+
+    def get_current_move_speed(self):
+        """PLAYER_CUR_MOVE_SPEED: actual current movement speed (vs base movementSpeed)."""
+        return self._float(self._send("PLAYER_CUR_MOVE_SPEED"))
+
+    def get_attack_speed_left(self):
+        """PLAYER_ATK_SPEED_LEFT: time remaining until next attack window."""
+        return self._float(self._send("PLAYER_ATK_SPEED_LEFT"))
+
+    def get_move_speed_forward(self):
+        """PLAYER_MOVE_SPEED_FWD: forward axis movement speed component."""
+        return self._float(self._send("PLAYER_MOVE_SPEED_FWD"))
+
+    def get_move_speed_right(self):
+        """PLAYER_MOVE_SPEED_RIGHT: right/strafe axis movement speed component."""
+        return self._float(self._send("PLAYER_MOVE_SPEED_RIGHT"))
+
+    def get_move_state(self):
+        """PLAYER_MOVE_STATE: movement state int (0=idle, varies by game version)."""
+        return self._int(self._send("PLAYER_MOVE_STATE"))
+
+    def get_player_movement(self):
+        """PLAYER_MOVEMENT: full EntityMovementData struct as a dict.
+        Keys: lastPos(x/y/z), pos(x/y/z), dir, moving, speed, curSpeed,
+              fwdSpeed, rightSpeed, atkSpeed, atkSpeedLeft, moveState, frozen,
+              rotAnimDir, shouldRotAnim."""
+        r = self._send("PLAYER_MOVEMENT")
+        if not r or r in ("NOT_INITIALIZED", "NO_PLAYER"): return {}
+        return self._parse_kv(r)
+
+    def get_player_animation(self):
+        """PLAYER_ANIMATION: full EntityAnimationData struct as a dict.
+        Keys: state, lastState, interruptAnim, allowShadow,
+              dmgAudioTimer, dmgAnimTimer, activeAnimCount."""
+        r = self._send("PLAYER_ANIMATION")
+        if not r or r in ("NOT_INITIALIZED", "NO_PLAYER"): return {}
+        return self._parse_kv(r)
+
+    def get_player_infobar(self):
+        """PLAYER_INFOBAR: EntityInfoBarData for the local player.
+        Keys: hitTimer, chatTimer, updateTimer, visGroup, entityType,
+              hasSnap, snapX, snapY, snapZ."""
+        r = self._send("PLAYER_INFOBAR")
+        if not r or r in ("NOT_INITIALIZED", "NO_PLAYER"): return {}
+        return self._parse_kv(r)
+
     # ══════════════════════════════════════════════════════════════
     #  COMBAT
     # ══════════════════════════════════════════════════════════════
@@ -382,25 +416,9 @@ class EthyToolConnection:
     def get_attack_speed(self): return self._float(self._send("PLAYER_ATTACK_SPEED"))
     def get_physical_armor(self): return self._float(self._send("PLAYER_PHYS_ARMOR"))
     def get_magical_armor(self):  return self._float(self._send("PLAYER_MAG_ARMOR"))
-    def get_condition_mask(self): return self._int(self._send("PLAYER_CONDITION_MASK"))
 
-    # ══════════════════════════════════════════════════════════════
-    #  ANIMATION & INFOBAR
-    # ══════════════════════════════════════════════════════════════
-
-    def get_animation_data(self):
-        """PLAYER_ANIMATION: entity model state — state IDs, interrupting anim, active count."""
-        r = self._send("PLAYER_ANIMATION")
-        if not r or r in ("NO_PLAYER", "NOT_INITIALIZED"): return {}
-        return self._parse_kv(r)
-
-    def get_infobar_data(self):
-        """PLAYER_INFOBAR: info bar timers and visibility — hit_timer, chat_timer, progression."""
-        r = self._send("PLAYER_INFOBAR")
-        if not r or r in ("NO_PLAYER", "NOT_INITIALIZED"): return {}
-        return self._parse_kv(r)
-
-    def cast(self, spell_name):
+    def cast(self, spell_name: str) -> bool:
+        """Cast spell by display name. Returns True on success."""
         r = self._send(f"CAST_{spell_name}")
         return r is not None and r.startswith("OK")
 
@@ -509,18 +527,6 @@ class EthyToolConnection:
                 d[key] = 0.0
         return d if d.get("name") else None
 
-    def get_target_animation(self):
-        """TARGET_ANIMATION: animation state of the hostile target (state, interrupting, counts)."""
-        r = self._send("TARGET_ANIMATION")
-        if not r or r in ("NO_TARGET", "NO_PLAYER"): return {}
-        return self._parse_kv(r)
-
-    def get_target_infobar(self):
-        """TARGET_INFOBAR: info bar data for hostile target (timers, visibility, entity type)."""
-        r = self._send("TARGET_INFOBAR")
-        if not r or r in ("NO_TARGET", "NO_PLAYER"): return {}
-        return self._parse_kv(r)
-
     def is_target_boss(self):
         t = self.get_target()
         return t.get("boss", False) if t else False
@@ -569,6 +575,34 @@ class EthyToolConnection:
         ft = self.get_friendly_target()
         return ft.get("hp", 0) if ft else 0
 
+    def get_target_animation(self):
+        """TARGET_ANIMATION: EntityAnimationData for the current hostile target.
+        Keys: state, lastState, interruptAnim, allowShadow,
+              dmgAudioTimer, dmgAnimTimer, activeAnimCount."""
+        r = self._send("TARGET_ANIMATION")
+        if not r or r in ("NO_TARGET", "NO_PLAYER", "NOT_INITIALIZED"): return {}
+        return self._parse_kv(r)
+
+    def get_target_infobar(self):
+        """TARGET_INFOBAR: EntityInfoBarData for the current hostile target.
+        Keys: hitTimer, chatTimer, updateTimer, visGroup, entityType,
+              hasSnap, snapX, snapY, snapZ."""
+        r = self._send("TARGET_INFOBAR")
+        if not r or r in ("NO_TARGET", "NO_PLAYER", "NOT_INITIALIZED"): return {}
+        return self._parse_kv(r)
+
+    def dump_infobar(self):
+        """DUMP_INFOBAR: raw field dump of the infobar on the current target (debug)."""
+        return self._send("DUMP_INFOBAR") or ""
+
+    def dump_target_entity(self):
+        """DUMP_TARGET_ENTITY: raw field/offset dump of the current hostile target (debug)."""
+        return self._send("DUMP_TARGET_ENTITY") or ""
+
+    def dump_target_offset(self):
+        """DUMP_TARGET_OFFSET: read a specific offset from the current target (debug)."""
+        return self._send("DUMP_TARGET_OFFSET") or ""
+
     def exit_game(self):
         """EXIT_GAME: invoke Application.Quit() via IL2CPP for a clean Unity shutdown."""
         return self._send("EXIT_GAME") or "NO_RESPONSE"
@@ -589,6 +623,21 @@ class EthyToolConnection:
         if not r or r in ("NONE", "NO_PLAYER", "IL2CPP_NOT_AVAILABLE"): return []
         parts = r.split("###")
         return [self._parse_kv(b) for b in parts if b.strip() and not b.startswith("count=")]
+
+    def get_fishing_spots(self):
+        """FISHING_SPOTS: nearby entities whose class or name matches fishing-related
+        keywords (fish, bobber, rod, pond, lake, river, etc.).
+        Returns list of dicts with keys: ptr, uid, class, name, x, y, z,
+        spawned, hidden, static. Falls back to all visible nearby if none match."""
+        r = self._send("FISHING_SPOTS")
+        if not r or r in ("NO_PLAYER", "NO_NEARBY_WRAPPER", "BAD_NEARBY_LIST",
+                          "NO_FISHING_SPOTS", "IL2CPP_NOT_AVAILABLE"): return []
+        return self._parse_addr_entries(r)
+
+    def party_debug(self):
+        """PARTY_DEBUG: raw field dump of the Party/Group IL2CPP object (debug).
+        Returns a multi-line string of field names, offsets, and values."""
+        return self._send("PARTY_DEBUG") or ""
 
     # ══════════════════════════════════════════════════════════════
     #  QUESTS
@@ -887,39 +936,26 @@ class EthyToolConnection:
     def scan_scene(self):      return self._parse_scan(self._send("SCAN_SCENE"))
 
     def scan_doodads(self):
-        """Scan for interactable/gatherable doodads using NEARBY_ADDRESSES.
-        Filters for non-hidden static entities (resource nodes are typically static)."""
         entities = self.get_nearby_addresses()
-
         if not entities:
-            # Fallback: try full scene scan
             entities = self.get_scene_addresses()
-
         doodads = []
-
         PLAYER_CLASSES = {"LocalPlayerEntity", "PlayerEntity", "LivingEntity"}
         MOB_CLASSES = {"NPCEntity", "MonsterEntity", "HostileEntity"}
         SKIP_CLASSES = PLAYER_CLASSES | MOB_CLASSES
-
         for e in entities:
             cls = e.get("class", "?")
-
             if cls in SKIP_CLASSES:
                 continue
             if e.get("hidden"):
                 continue
-
             if e.get("static") or cls in ("Doodad", "HarvestNode", "GatherableEntity",
-                                           "ResourceNode", "InteractableEntity",
-                                           "StaticEntity"):
+                                         "ResourceNode", "InteractableEntity",
+                                         "StaticEntity"):
                 doodads.append(e)
-
         return doodads
 
     def debug_find(self, name_filter):
-        """DEBUG_FIND_<name>: search all nearby + scene entities by name substring.
-        Returns list of matching entities with their IL2CPP class names.
-        Use this to discover what class harvestable nodes actually are."""
         r = self._send(f"DEBUG_FIND_{name_filter}")
         if not r or r in ("NOT_FOUND", "NO_PLAYER", "IL2CPP_NOT_AVAILABLE"):
             return []
@@ -1178,6 +1214,14 @@ class EthyToolConnection:
     def in_wildlands(self):    return self._send("PLAYER_WILDLANDS") == "1"
     def is_spectating(self):   return self._send("PLAYER_SPECTATOR") == "1"
 
+    def get_condition_mask(self):
+        """PLAYER_CONDITION_MASK: conditionStateMask bitmask (stun/root/silence flags)."""
+        return self._int(self._send("PLAYER_CONDITION_MASK"))
+
+    def get_death_timer(self):
+        """PLAYER_DEATH_TIMER: concurrentDeathsTimer — time since last death event."""
+        return self._float(self._send("PLAYER_DEATH_TIMER"))
+
     # ══════════════════════════════════════════════════════════════
     #  CAMERA
     # ══════════════════════════════════════════════════════════════
@@ -1195,6 +1239,37 @@ class EthyToolConnection:
     def get_camera_pitch(self):    return self._float(self._send("CAMERA_PITCH"))
 
     # ══════════════════════════════════════════════════════════════
+    #  UI COLOR THEMING
+    # ══════════════════════════════════════════════════════════════
+
+    def set_ui_color(self, class_name: str, offset: int, r: float, g: float, b: float, a: float = 1.0) -> bool:
+        """UI_COLOR_<class>_<offset>_r_g_b_a: set the Color field at `offset` on the
+        static instance of `class_name`. r/g/b/a are 0.0–1.0 floats.
+        Example: conn.set_ui_color('UnitFrame', 0x80, 1.0, 0.0, 0.0)  # red HP bar"""
+        cmd = f"UI_COLOR_{class_name}_{offset}_{r}_{g}_{b}_{a}"
+        resp = self._send(cmd)
+        return resp == "OK"
+
+    def set_ui_color_inst(self, class_name: str, instance_index: int, offset: int,
+                          r: float, g: float, b: float, a: float = 1.0) -> bool:
+        """UI_COLOR_INST_<class>_<idx>_<offset>_r_g_b_a: set the Color field at
+        `offset` on a specific instance (by index) of `class_name`."""
+        cmd = f"UI_COLOR_INST_{class_name}_{instance_index}_{offset}_{r}_{g}_{b}_{a}"
+        resp = self._send(cmd)
+        return resp == "OK"
+
+    def read_ui_color(self, class_name: str, offset: int) -> dict:
+        """UI_READ_COLOR_<class>_<offset>: read the current Color at `offset` on the
+        static instance of `class_name`. Returns dict with keys r, g, b, a (0.0–1.0)."""
+        r = self._send(f"UI_READ_COLOR_{class_name}_{offset}")
+        if not r or r in ("NOT_FOUND", "NOT_INITIALIZED", "UNKNOWN_CMD"): return {}
+        return self._parse_kv(r)
+
+    def refresh_ui_colors(self) -> bool:
+        """UI_REFRESH_COLORS: force the game to re-apply all cached UI color overrides."""
+        return self._send("UI_REFRESH_COLORS") == "OK"
+
+    # ══════════════════════════════════════════════════════════════
     #  BULK READ
     # ══════════════════════════════════════════════════════════════
 
@@ -1202,7 +1277,7 @@ class EthyToolConnection:
         r = self._send("PLAYER_ALL")
         if not r or r == "NOT_INITIALIZED": return {}
         data = {}
-        INT_KEYS = {"gold", "max_hp", "max_mp", "dir", "uid", "move_state", "condition_mask"}
+        INT_KEYS = {"gold", "max_hp", "max_mp", "dir", "uid"}
         STR_KEYS = {"name", "job"}
         BOOL_KEYS = {"combat", "moving", "frozen", "pz", "spectator", "wildlands",
                      "boss", "elite", "critter", "rare", "static", "hidden", "spawned"}
@@ -1275,6 +1350,7 @@ class EthyToolConnection:
     def dump_offsets(self):    return self._send("DUMP_OFFSETS") or ""
     def dump_fields(self, cn): return self._send(f"DUMP_FIELDS_{cn}") or ""
     def dump_methods(self, cn): return self._send(f"DUMP_METHODS_{cn}") or ""
+    def dump_fields_raw(self): return self._send("DUMP_FIELDS") or ""
 
     def get_open_containers(self):
         """OPEN_CONTAINERS: items in all currently open loot/container windows."""
@@ -1950,7 +2026,8 @@ class EthyToolConnection:
         return data
 
 
-def create_connection(pid=None):
+def create_connection(pid: Optional[int] = None) -> EthyToolConnection:
+    """Create an EthyToolConnection. Pass pid to connect to a specific game process."""
     return EthyToolConnection(pid=pid)
 
 
@@ -1973,6 +2050,7 @@ class ScreenReader:
         self._cv2       = None
         self._np        = None
         self._ImageGrab = None
+        self._mss       = None
         self._win32gui  = None
         self._ready     = False
         self._game_hwnd = None
@@ -1981,43 +2059,81 @@ class ScreenReader:
     def _init(self):
         try:
             import cv2, numpy as np
-            from PIL import ImageGrab
-            self._cv2        = cv2
-            self._np         = np
-            self._ImageGrab  = ImageGrab
-            self._ready      = True
+            self._cv2  = cv2
+            self._np   = np
+            self._ready = True
         except ImportError as e:
             print(f"[ScreenReader] Missing dependency: {e}")
-            print("[ScreenReader] Run:  pip install opencv-python Pillow")
+            print("[ScreenReader] Run:  pip install opencv-python")
             return
-        # Try to find the game window handle for targeted capture
+        # Prefer mss for fast (~5ms) multi-monitor capture; fall back to PIL.ImageGrab
+        try:
+            import mss as _mss
+            self._mss = _mss.mss()
+        except ImportError:
+            self._mss = None
+        if self._mss is None:
+            try:
+                from PIL import ImageGrab
+                self._ImageGrab = ImageGrab
+            except ImportError:
+                print("[ScreenReader] Install mss or Pillow for screenshots.")
+                self._ready = False
+                return
+        # Try pywin32 first for reliable window rect; fall back to ctypes
         try:
             import win32gui
             self._win32gui = win32gui
             self._find_game_window()
         except ImportError:
-            pass  # pywin32 not installed — will use all-monitor fallback
+            pass  # will use ctypes fallback in _find_game_window
 
     def _find_game_window(self):
         """Find the game window by title and cache its HWND."""
-        if not self._win32gui:
+        if self._win32gui:
+            # pywin32 path — most reliable
+            found = []
+            def _cb(hwnd, _):
+                if self._win32gui.IsWindowVisible(hwnd):
+                    title = self._win32gui.GetWindowText(hwnd).lower()
+                    if self.GAME_EXE.lower() in title:
+                        found.append(hwnd)
+            self._win32gui.EnumWindows(_cb, None)
+            self._game_hwnd = found[0] if found else None
             return
-        found = []
-        def _cb(hwnd, _):
-            if self._win32gui.IsWindowVisible(hwnd):
-                title = self._win32gui.GetWindowText(hwnd).lower()
-                if self.GAME_EXE.lower() in title:
-                    found.append(hwnd)
-        self._win32gui.EnumWindows(_cb, None)
-        self._game_hwnd = found[0] if found else None
+        # ctypes fallback (no pywin32)
+        try:
+            import ctypes, ctypes.wintypes
+            u32 = ctypes.windll.user32
+            found = []
+            WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL,
+                                              ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+            def _cb(hwnd, _):
+                if u32.IsWindowVisible(hwnd):
+                    buf = ctypes.create_unicode_buffer(256)
+                    u32.GetWindowTextW(hwnd, buf, 256)
+                    if self.GAME_EXE.lower() in buf.value.lower():
+                        found.append(hwnd)
+                return True
+            u32.EnumWindows(WNDENUMPROC(_cb), 0)
+            self._game_hwnd = found[0] if found else None
+        except Exception:
+            pass
 
     def _game_rect(self):
         """Return (left, top, right, bottom) of the game window, or None."""
-        if not self._win32gui or not self._game_hwnd:
+        if not self._game_hwnd:
+            self._find_game_window()
+        if not self._game_hwnd:
             return None
         try:
-            rect = self._win32gui.GetWindowRect(self._game_hwnd)
-            # rect = (left, top, right, bottom)
+            if self._win32gui:
+                rect = self._win32gui.GetWindowRect(self._game_hwnd)
+            else:
+                import ctypes, ctypes.wintypes
+                r = ctypes.wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(self._game_hwnd, ctypes.byref(r))
+                rect = (r.left, r.top, r.right, r.bottom)
             if rect[2] - rect[0] < 100:   # sanity check — minimized?
                 return None
             return rect
@@ -2032,12 +2148,23 @@ class ScreenReader:
         - If region is given, crops to that box (absolute screen coords).
         - If game window is found, captures just that window.
         - Otherwise captures the full virtual desktop (all monitors).
+        Uses mss (~5ms) when available, falls back to PIL.ImageGrab.
         """
         if not self._ready:
             return None
         if region is None:
             region = self._game_rect()   # use game window if available
-        # all_screens=True captures across all monitors (handles multi-monitor)
+        if self._mss is not None:
+            if region:
+                l, t, r, b = region
+                mon = {"left": l, "top": t, "width": r - l, "height": b - t}
+            else:
+                mon = self._mss.monitors[0]  # full virtual desktop (all monitors)
+            shot = self._mss.grab(mon)
+            arr = self._np.frombuffer(shot.rgb, dtype=self._np.uint8)
+            arr = arr.reshape((shot.height, shot.width, 3))
+            return self._cv2.cvtColor(arr, self._cv2.COLOR_RGB2BGR)
+        # PIL fallback
         img = self._ImageGrab.grab(bbox=region, all_screens=True)
         arr = self._np.array(img)
         return self._cv2.cvtColor(arr, self._cv2.COLOR_RGB2BGR)
