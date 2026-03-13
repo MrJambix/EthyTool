@@ -205,6 +205,8 @@ class EthyToolConnection:
         self._state = CombatState()
         self._profile_cache = None
         self._log_fn = lambda msg: print(msg, flush=True)
+        self._cast_failures = {}
+        self._blocked_spells = set()
 
     @property
     def pid(self):
@@ -337,6 +339,26 @@ class EthyToolConnection:
     def get_speed(self):       return self._float(self._send("PLAYER_SPEED"))
     def get_direction(self):   return self._int(self._send("PLAYER_DIRECTION"))
 
+    def get_current_move_speed(self): return self._float(self._send("PLAYER_CUR_MOVE_SPEED"))
+    def get_attack_speed_left(self):  return self._float(self._send("PLAYER_ATK_SPEED_LEFT"))
+    def get_move_speed_forward(self): return self._float(self._send("PLAYER_MOVE_SPEED_FWD"))
+    def get_move_speed_right(self):   return self._float(self._send("PLAYER_MOVE_SPEED_RIGHT"))
+    def get_move_state(self):         return self._int(self._send("PLAYER_MOVE_STATE"))
+    def get_death_timer(self):        return self._float(self._send("PLAYER_DEATH_TIMER"))
+
+    def get_last_position(self):
+        r = self._send("PLAYER_LAST_POS")
+        if not r: return (0.0, 0.0, 0.0)
+        p = r.split(",")
+        if len(p) < 3: return (0.0, 0.0, 0.0)
+        return (float(p[0]), float(p[1]), float(p[2]))
+
+    def get_movement_data(self):
+        """PLAYER_MOVEMENT: full movement snapshot — pos, last_pos, speeds, state, frozen."""
+        r = self._send("PLAYER_MOVEMENT")
+        if not r or r in ("NO_PLAYER", "NOT_INITIALIZED"): return {}
+        return self._parse_kv(r)
+
     def move_to_target(self):
         r = self._send("MOVE_TO_TARGET")
         return r is not None and "OK" in r
@@ -360,6 +382,23 @@ class EthyToolConnection:
     def get_attack_speed(self): return self._float(self._send("PLAYER_ATTACK_SPEED"))
     def get_physical_armor(self): return self._float(self._send("PLAYER_PHYS_ARMOR"))
     def get_magical_armor(self):  return self._float(self._send("PLAYER_MAG_ARMOR"))
+    def get_condition_mask(self): return self._int(self._send("PLAYER_CONDITION_MASK"))
+
+    # ══════════════════════════════════════════════════════════════
+    #  ANIMATION & INFOBAR
+    # ══════════════════════════════════════════════════════════════
+
+    def get_animation_data(self):
+        """PLAYER_ANIMATION: entity model state — state IDs, interrupting anim, active count."""
+        r = self._send("PLAYER_ANIMATION")
+        if not r or r in ("NO_PLAYER", "NOT_INITIALIZED"): return {}
+        return self._parse_kv(r)
+
+    def get_infobar_data(self):
+        """PLAYER_INFOBAR: info bar timers and visibility — hit_timer, chat_timer, progression."""
+        r = self._send("PLAYER_INFOBAR")
+        if not r or r in ("NO_PLAYER", "NOT_INITIALIZED"): return {}
+        return self._parse_kv(r)
 
     def cast(self, spell_name):
         r = self._send(f"CAST_{spell_name}")
@@ -428,6 +467,60 @@ class EthyToolConnection:
         """TARGET_INFO with garbage guards."""
         return self.get_target()
 
+    def get_target_hp_v2(self):
+        """TARGET_HP_V2: percent, hp, max, cached, last, src (infobar|raw)."""
+        r = self._send("TARGET_HP_V2")
+        if not r or r in ("NO_TARGET", "NO_PLAYER"):
+            return None
+        d = {}
+        parts = r.split("|")
+        # First part is percent (no key)
+        if parts:
+            try:
+                d["percent"] = float(parts[0])
+            except (ValueError, TypeError):
+                pass
+        for pair in parts[1:]:
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                if k in ("hp", "max", "cached", "last"):
+                    try:
+                        d[k] = int(v)
+                    except (ValueError, TypeError):
+                        d[k] = 0
+                elif k == "src":
+                    d[k] = v
+                else:
+                    try:
+                        d[k] = float(v)
+                    except (ValueError, TypeError):
+                        d[k] = 0
+        return d if d else None
+
+    def get_target_info_v2(self):
+        """TARGET_INFO_V2: extended target data with combat, display_hp, raw_pct, src."""
+        r = self._send("TARGET_INFO_V2")
+        if not r or r in ("NO_TARGET", "NO_PLAYER"):
+            return None
+        d = self._parse_kv(r)
+        for key in ("hp", "max_hp", "dist", "display_hp", "raw_pct"):
+            val = d.get(key, 0)
+            if isinstance(val, (int, float)) and (abs(val) > 1e7 or val < -1):
+                d[key] = 0.0
+        return d if d.get("name") else None
+
+    def get_target_animation(self):
+        """TARGET_ANIMATION: animation state of the hostile target (state, interrupting, counts)."""
+        r = self._send("TARGET_ANIMATION")
+        if not r or r in ("NO_TARGET", "NO_PLAYER"): return {}
+        return self._parse_kv(r)
+
+    def get_target_infobar(self):
+        """TARGET_INFOBAR: info bar data for hostile target (timers, visibility, entity type)."""
+        r = self._send("TARGET_INFOBAR")
+        if not r or r in ("NO_TARGET", "NO_PLAYER"): return {}
+        return self._parse_kv(r)
+
     def is_target_boss(self):
         t = self.get_target()
         return t.get("boss", False) if t else False
@@ -476,15 +569,135 @@ class EthyToolConnection:
         ft = self.get_friendly_target()
         return ft.get("hp", 0) if ft else 0
 
+    def exit_game(self):
+        """EXIT_GAME: invoke Application.Quit() via IL2CPP for a clean Unity shutdown."""
+        return self._send("EXIT_GAME") or "NO_RESPONSE"
+
+    # ══════════════════════════════════════════════════════════════
+    #  WORLD / ENTITY LOOKUPS
+    # ══════════════════════════════════════════════════════════════
+
+    def get_entity_by_uid(self, uid):
+        """ENTITY_BY_UID <uid>: look up any entity in EntityManager by UID."""
+        r = self._send(f"ENTITY_BY_UID {uid}")
+        if not r or r in ("NOT_FOUND", "NO_ENTITY_MANAGER", "INVALID_UID"): return None
+        return self._parse_kv(r)
+
+    def get_nearby_players(self):
+        """NEARBY_PLAYERS: other PlayerEntity instances in NearbyEntities (not self)."""
+        r = self._send("NEARBY_PLAYERS")
+        if not r or r in ("NONE", "NO_PLAYER", "IL2CPP_NOT_AVAILABLE"): return []
+        parts = r.split("###")
+        return [self._parse_kv(b) for b in parts if b.strip() and not b.startswith("count=")]
+
+    # ══════════════════════════════════════════════════════════════
+    #  QUESTS
+    # ══════════════════════════════════════════════════════════════
+
+    def get_active_quests(self):
+        """ACTIVE_QUESTS: list of active quests with name/title/state."""
+        r = self._send("ACTIVE_QUESTS")
+        if not r or r == "NONE": return []
+        return [self._parse_kv(b) for b in r.split("###") if b.strip()]
+
+    def has_quest(self, name):
+        """Check if a quest with this unique name is active."""
+        name_lower = name.lower()
+        return any(name_lower in q.get("name", "").lower() for q in self.get_active_quests())
+
+    # ══════════════════════════════════════════════════════════════
+    #  COMPANIONS
+    # ══════════════════════════════════════════════════════════════
+
+    def get_companions(self):
+        """COMPANIONS: list companion UIDs and HP."""
+        r = self._send("COMPANIONS")
+        if not r or r == "NONE": return []
+        return [self._parse_kv(b) for b in r.split("###") if b.strip()]
+
+    # ══════════════════════════════════════════════════════════════
+    #  PVP / LEGAL TARGETS
+    # ══════════════════════════════════════════════════════════════
+
+    def get_legal_targets(self):
+        """LEGAL_TARGETS: UIDs the server says are legal to attack."""
+        r = self._send("LEGAL_TARGETS")
+        if not r or r == "NONE": return []
+        try:
+            return [int(x) for x in r.split("|") if x.isdigit()]
+        except Exception:
+            return []
+
+    def is_legal_target(self, uid):
+        """Check if a specific UID is in legal targets."""
+        return uid in self.get_legal_targets()
+
+    # ══════════════════════════════════════════════════════════════
+    #  INBOX
+    # ══════════════════════════════════════════════════════════════
+
+    def has_new_messages(self):
+        """INBOX_NEW: True if inbox has unread messages."""
+        return self._send("INBOX_NEW") == "1"
+
+    # ══════════════════════════════════════════════════════════════
+    #  CHAT
+    # ══════════════════════════════════════════════════════════════
+
+    def send_chat(self, message):
+        """CHAT_SEND <msg>: send a chat message via ChatController."""
+        r = self._send(f"CHAT_SEND {message}")
+        return r == "OK"
+
+    # ══════════════════════════════════════════════════════════════
+    #  AUTOCAST
+    # ══════════════════════════════════════════════════════════════
+
+    def autocast_on(self, spell_name):
+        """AUTOCAST_ON <spell>: enable autocast for a spell."""
+        r = self._send(f"AUTOCAST_ON {spell_name}")
+        return r is not None and r.startswith("OK")
+
+    def autocast_off(self, spell_name):
+        """AUTOCAST_OFF <spell>: disable autocast for a spell."""
+        r = self._send(f"AUTOCAST_OFF {spell_name}")
+        return r is not None and r.startswith("OK")
+
+    # ══════════════════════════════════════════════════════════════
+    #  MOVEMENT
+    # ══════════════════════════════════════════════════════════════
+
+    def move_to(self, x, y):
+        """MOVE_TO <x> <y>: move player to world position."""
+        r = self._send(f"MOVE_TO {x} {y}")
+        return r == "OK"
+
+    def stop(self):
+        """STOP_MOVEMENT: stop all movement."""
+        return self._send("STOP_MOVEMENT") == "OK"
+
     # ══════════════════════════════════════════════════════════════
     #  PARTY
     # ══════════════════════════════════════════════════════════════
 
     def get_party(self):
+        """PARTY_ALL: all party members. Includes out-of-range members (hp=-1, in_range=0)."""
         r = self._send("PARTY_ALL")
         if not r or r in ("NOT_IN_PARTY", "NOT_INITIALIZED", "NO_ENTITIES"):
             return []
         return [self._parse_kv(b) for b in r.split("###") if b.strip()]
+
+    def get_party_nearby(self):
+        """Like get_party() but only members currently in range (in_range=1)."""
+        return [m for m in self.get_party() if m.get("in_range", False)]
+
+    def party_scan(self):
+        """PARTY_SCAN: find all PlayerEntity instances in EntityManager (scene-wide, not just nearby)."""
+        r = self._send("PARTY_SCAN")
+        if not r or r in ("NO_PLAYERS", "NO_ENTITY_MANAGER", "IL2CPP_NOT_AVAILABLE"):
+            return []
+        parts = r.split("###")
+        return [self._parse_kv(b) for b in parts if b.strip() and not b.startswith("count=")]
 
     def get_party_count(self):    return self._int(self._send("PARTY_COUNT"))
     def in_party(self):           return self.get_party_count() > 1
@@ -509,6 +722,7 @@ class EthyToolConnection:
         return sorted(hurt, key=lambda m: m.get("hp", 100))
 
     def target_party_member(self, index):
+        """Target party member by PARTY_ALL index (0 = self). Uses TARGET_PARTY <idx>."""
         r = self._send(f"TARGET_PARTY {index}")
         return r is not None and r.startswith("OK")
 
@@ -546,6 +760,7 @@ class EthyToolConnection:
     def find_nearby(self, name):
         nl = name.lower()
         for e in self.get_nearby():
+            if e.get("hidden"): continue
             if nl in e.get("name", "").lower(): return e
         return None
 
@@ -560,6 +775,7 @@ class EthyToolConnection:
         if name:
             nl = name.lower()
             ents = [e for e in ents if nl in e.get("name", "").lower()]
+        ents = [e for e in ents if not e.get("hidden")]
         if not ents: return None
         px, py, _ = self.get_position()
         best, best_dist = None, float("inf")
@@ -627,12 +843,13 @@ class EthyToolConnection:
     def find_in_scene(self, name):
         nl = name.lower()
         for e in self.get_scene():
+            if e.get("hidden"): continue
             if nl in e.get("name", "").lower(): return e
         return None
 
     def find_all_in_scene(self, name):
         nl = name.lower()
-        return [e for e in self.get_scene() if nl in e.get("name", "").lower()]
+        return [e for e in self.get_scene() if nl in e.get("name", "").lower() and not e.get("hidden")]
 
     def find_closest_in_scene(self, name=None):
         ents = self.get_scene()
@@ -668,55 +885,51 @@ class EthyToolConnection:
 
     def scan_nearby(self):     return self._parse_scan(self._send("SCAN_NEARBY"))
     def scan_scene(self):      return self._parse_scan(self._send("SCAN_SCENE"))
-    def scan_doodads(self):    return [e for e in self.scan_nearby() if e.get("class") == "Doodad"]
 
-    def scan_harvestable(self, skip=None):
-        if skip is None:
-            skip = {"calm fog", "magic enchantment", "gravestone", "bush"}
-        return [e for e in self.scan_doodads()
-                if not e.get("hidden") and e.get("name", "").lower() not in skip]
+    def scan_doodads(self):
+        """Scan for interactable/gatherable doodads using NEARBY_ADDRESSES.
+        Filters for non-hidden static entities (resource nodes are typically static)."""
+        entities = self.get_nearby_addresses()
 
-    # ══════════════════════════════════════════════════════════════
-    #  GATHERING
-    # ══════════════════════════════════════════════════════════════
+        if not entities:
+            # Fallback: try full scene scan
+            entities = self.get_scene_addresses()
+
+        doodads = []
+
+        PLAYER_CLASSES = {"LocalPlayerEntity", "PlayerEntity", "LivingEntity"}
+        MOB_CLASSES = {"NPCEntity", "MonsterEntity", "HostileEntity"}
+        SKIP_CLASSES = PLAYER_CLASSES | MOB_CLASSES
+
+        for e in entities:
+            cls = e.get("class", "?")
+
+            if cls in SKIP_CLASSES:
+                continue
+            if e.get("hidden"):
+                continue
+
+            if e.get("static") or cls in ("Doodad", "HarvestNode", "GatherableEntity",
+                                           "ResourceNode", "InteractableEntity",
+                                           "StaticEntity"):
+                doodads.append(e)
+
+        return doodads
+
+    def debug_find(self, name_filter):
+        """DEBUG_FIND_<name>: search all nearby + scene entities by name substring.
+        Returns list of matching entities with their IL2CPP class names.
+        Use this to discover what class harvestable nodes actually are."""
+        r = self._send(f"DEBUG_FIND_{name_filter}")
+        if not r or r in ("NOT_FOUND", "NO_PLAYER", "IL2CPP_NOT_AVAILABLE"):
+            return []
+        return self._parse_addr_entries(r)
 
     def use_entity(self, name):
+        """Use/interact with nearby entity by name filter. Game auto-gathers/attacks.
+        Returns True on success."""
         r = self._send(f"USE_ENTITY_{name}")
-        if not r or not r.startswith("OK_USED"): return False
-        return "invoke=0" in r
-
-    def has_progress(self):    return self._send("HAS_PROGRESS") == "1"
-
-    def wait_progress(self, timeout=30):
-        consecutive = 0
-        for _ in range(8):
-            if self.has_progress():
-                consecutive += 1
-                if consecutive >= 2: break
-            else: consecutive = 0
-            time.sleep(0.5)
-        if consecutive < 2:
-            time.sleep(12); return True
-        for _ in range(timeout * 2):
-            if not self.has_progress(): return True
-            time.sleep(0.5)
-        return False
-
-    def gather(self, name, post_delay=3):
-        if not self.use_entity(name): return False
-        done = self.wait_progress()
-        time.sleep(post_delay)
-        return done
-
-    def closest_node(self, name=None):
-        all_n = self.scan_harvestable()
-        if name:
-            nl = name.lower()
-            all_n = [e for e in all_n if nl in e.get("name", "").lower()]
-        if not all_n: return None
-        px, py, _ = self.get_position()
-        return min(all_n, key=lambda e: math.sqrt(
-            (float(e.get("x", 0)) - px) ** 2 + (float(e.get("y", 0)) - py) ** 2))
+        return r is not None and ("OK_USED" in r or "OK_USE_ENTITY" in r)
 
     # ══════════════════════════════════════════════════════════════
     #  SPELLS
@@ -807,9 +1020,13 @@ class EthyToolConnection:
         return results
 
     def get_player_stacks(self):
-        """Get active stack effects. Returns empty list if DLL doesn't support."""
-        r = self._send("PLAYER_STACK_EFFECTS")
-        if not r or r in ("NONE", "NOT_INITIALIZED", "UNKNOWN_CMD"):
+        """Get fury/rage stacks. Use get_fury_stacks() for the count value."""
+        return self.get_fury_stacks()
+
+    def get_player_skills(self):
+        """PLAYER_SKILLS: raw skill/XP data from game."""
+        r = self._send("PLAYER_SKILLS")
+        if not r or r in ("NO_PLAYER", "NO_SKILL_LIST", "EMPTY", "NOT_INITIALIZED"):
             return []
         return [self._parse_kv(s) for s in r.split("###") if s.strip()]
 
@@ -946,66 +1163,6 @@ class EthyToolConnection:
         return None
 
     # ══════════════════════════════════════════════════════════════
-    #  LOOT
-    # ══════════════════════════════════════════════════════════════
-
-    def get_loot_window_count(self): return self._int(self._send("LOOT_WINDOW_COUNT"))
-
-    def get_loot_window_items(self):
-        r = self._send("LOOT_WINDOW_ITEMS")
-        if not r or r in ("NONE", "NOT_INITIALIZED"): return []
-        return [self._parse_kv(i) for i in r.split("###") if i.strip()]
-
-    def has_loot_window(self):  return self.get_loot_window_count() > 0
-
-    def get_last_corpse(self):
-        r = self._send("LAST_CORPSE")
-        if not r or r in ("NONE", "NOT_INITIALIZED"): return None
-        return self._parse_kv(r)
-
-    def has_corpse(self):       return self.get_last_corpse() is not None
-
-    def loot_all(self):
-        r = self._send("LOOT_ALL")
-        return r is not None and r.startswith("OK")
-
-    def open_corpse(self):
-        r = self._send("OPEN_CORPSE")
-        return r is not None and r.startswith("OK")
-
-    def loot_corpse_window(self):
-        r = self._send("LOOT_CORPSE_WINDOW")
-        return r is not None and "OK" in r
-
-    def loot(self):
-        """Loot corpse window if open, fallback to auto_loot."""
-        if self.loot_corpse_window():
-            return True
-        return self.auto_loot()
-
-    def list_corpses(self):
-        r = self._send("LIST_CORPSES")
-        if not r or r == "NONE": return []
-        results = []
-        for part in r.split("###"):
-            d = {}
-            for kv in part.split("|"):
-                if "=" in kv:
-                    k, v = kv.split("=", 1)
-                    try: d[k] = int(v)
-                    except ValueError: d[k] = v
-            if d: results.append(d)
-        return results
-
-    def auto_loot(self):
-        r = self._send("AUTO_LOOT")
-        return r is not None and "OK" in r
-
-    def loot_nearest(self):
-        r = self._send("LOOT_NEAREST")
-        return r is not None and r.startswith("OK")
-
-    # ══════════════════════════════════════════════════════════════
     #  GOLD & STATUS
     # ══════════════════════════════════════════════════════════════
 
@@ -1045,7 +1202,7 @@ class EthyToolConnection:
         r = self._send("PLAYER_ALL")
         if not r or r == "NOT_INITIALIZED": return {}
         data = {}
-        INT_KEYS = {"gold", "max_hp", "max_mp", "dir", "uid"}
+        INT_KEYS = {"gold", "max_hp", "max_mp", "dir", "uid", "move_state", "condition_mask"}
         STR_KEYS = {"name", "job"}
         BOOL_KEYS = {"combat", "moving", "frozen", "pz", "spectator", "wildlands",
                      "boss", "elite", "critter", "rare", "static", "hidden", "spawned"}
@@ -1119,6 +1276,83 @@ class EthyToolConnection:
     def dump_fields(self, cn): return self._send(f"DUMP_FIELDS_{cn}") or ""
     def dump_methods(self, cn): return self._send(f"DUMP_METHODS_{cn}") or ""
 
+    def get_open_containers(self):
+        """OPEN_CONTAINERS: items in all currently open loot/container windows."""
+        r = self._send("OPEN_CONTAINERS")
+        if not r or r in ("NONE", "NOT_INITIALIZED", "UNKNOWN_CMD"): return []
+        return [self._parse_kv(e) for e in r.split("###") if e.strip()]
+
+    def get_open_containers_count(self):
+        """OPEN_CONTAINERS_COUNT: number of currently open loot/container windows."""
+        return self._int(self._send("OPEN_CONTAINERS_COUNT"))
+
+    def get_loot_window_count(self):
+        """LOOT_WINDOW_COUNT: number of open ContainerWindows via the same static
+        dict used by LOOT_ALL (ContainerWindow.GetAllOpenedContainerWindows).
+        Use this — not get_open_containers_count() — to detect corpse loot windows."""
+        return self._int(self._send("LOOT_WINDOW_COUNT"))
+
+    def loot_all(self):
+        """LOOT_ALL: calls ContainerWindow.LootAll() on every open loot window.
+        Returns (windows_looted, raw_response) or (0, reason_str) on failure."""
+        r = self._send("LOOT_ALL")
+        if not r or r in ("NONE", "NOT_INITIALIZED", "NO_OPEN_WINDOWS"): return (0, r or "NONE")
+        if r.startswith("NO_") or r in ("IL2CPP_NOT_AVAILABLE", "INVOKE_FAILED"): return (0, r)
+        if r.startswith("OK|windows="):
+            try: return (int(r.split("=", 1)[1]), r)
+            except ValueError: pass
+        return (0, r)
+
+    def debug_loot(self):
+        """DEBUG_LOOT: dump raw pointer chain for open-container detection."""
+        return self._send("DEBUG_LOOT") or "NO_RESPONSE"
+
+    def get_debug_windows(self):
+        """DEBUG_WINDOWS: open container/loot windows info."""
+        r = self._send("DEBUG_WINDOWS")
+        if not r or r.startswith("NO_") or r.startswith("ERROR"):
+            return []
+        parts = r.split("###")
+        result = []
+        for p in parts[1:] if parts and parts[0].startswith("count=") else parts:
+            if "|" in p:
+                result.append(self._parse_kv(p))
+        return result
+
+    def map_search(self):
+        """MAP_SEARCH: find map-related IL2CPP classes."""
+        r = self._send("MAP_SEARCH")
+        if not r or r == "NONE":
+            return []
+        if r.startswith("FOUND_") and "|" in r:
+            return r.split("|", 1)[1].split("|")
+        return []
+
+    def map_inspect(self, class_name):
+        """MAP_INSPECT_<class>: dump fields/methods of a map class."""
+        return self._send(f"MAP_INSPECT_{class_name}") or ""
+
+    def party_search(self):
+        """PARTY_SEARCH: find Party/Group-related IL2CPP classes for structure discovery."""
+        r = self._send("PARTY_SEARCH")
+        if not r or r == "NONE":
+            return []
+        if r.startswith("FOUND_") and "|" in r:
+            return r.split("|", 1)[1].split("|")
+        return []
+
+    def party_inspect(self, class_name):
+        """PARTY_INSPECT_<class>: dump fields/methods of a party-related class."""
+        return self._send(f"PARTY_INSPECT_{class_name}") or ""
+
+    def scene_find(self, name):
+        """SCENE_FIND_<name>: find GameObject by name. Returns PTR=0x... or NOT_FOUND."""
+        return self._send(f"SCENE_FIND_{name}") or ""
+
+    def scene_dump(self, max_depth=4):
+        """SCENE_DUMP: dump scene hierarchy. Optional depth via SCENE_DUMP_<n>."""
+        return self._send(f"SCENE_DUMP_{max_depth}" if max_depth != 4 else "SCENE_DUMP") or ""
+
     # ══════════════════════════════════════════════════════════════
     #  PROFILE LOADER
     # ══════════════════════════════════════════════════════════════
@@ -1165,6 +1399,8 @@ class EthyToolConnection:
     def try_cast(self, name):
         if name in IGNORED_SPELLS:
             return False
+        if name in self._blocked_spells:
+            return False
 
         p = self.load_profile()
         if p and name in getattr(p, "IGNORED_SPELLS", set()):
@@ -1193,8 +1429,13 @@ class EthyToolConnection:
 
         result = self.cast(name)
         if not result:
+            self._cast_failures[name] = self._cast_failures.get(name, 0) + 1
+            if self._cast_failures[name] >= 3:
+                self._blocked_spells.add(name)
+                self.log(f"⚠ Blocked '{name}' — failed {self._cast_failures[name]}x (skill level too low?)")
             return False
 
+        self._cast_failures.pop(name, None)
         self._state.trigger_gcd()
         self._state.track_cast(name)
 
@@ -1217,10 +1458,17 @@ class EthyToolConnection:
 
     def try_cast_emergency(self, name):
         if name in IGNORED_SPELLS: return False
+        if name in self._blocked_spells: return False
         if self._state.on_gcd(): return False
         if not self.is_spell_ready(name): return False
         result = self.cast(name)
-        if not result: return False
+        if not result:
+            self._cast_failures[name] = self._cast_failures.get(name, 0) + 1
+            if self._cast_failures[name] >= 3:
+                self._blocked_spells.add(name)
+                self.log(f"⚠ Blocked '{name}' — failed {self._cast_failures[name]}x (skill level too low?)")
+            return False
+        self._cast_failures.pop(name, None)
         self._state.trigger_gcd()
         self._state.track_cast(name)
         info = self.get_spell_info(name)
@@ -1410,7 +1658,6 @@ class EthyToolConnection:
         while time.time() - start < timeout:
             if self.get_hp() >= hp_target and self.get_mp() >= mp_target: return True
             if self.in_combat(): return False
-            if self.has_progress(): time.sleep(1); continue
             if self.get_mp() < mp_target:
                 p = self.load_profile()
                 med = getattr(p, "MEDITATION_SPELL", "Leyline Meditation") if p else "Leyline Meditation"
@@ -1437,7 +1684,7 @@ class EthyToolConnection:
                 if not self.is_alive(): return
                 time.sleep(0.5)
             self.do_fight()
-            if loot_after: time.sleep(0.5); self.auto_loot()
+            if loot_after: time.sleep(0.5)
             if rest_after and not self.in_combat(): self.recover_between_pulls()
             time.sleep(0.3)
 
@@ -1543,10 +1790,100 @@ class EthyToolConnection:
                 self.do_buff()
                 if dps_when_safe: self.do_dps_weave()
             else:
-                self.auto_loot()
                 if self.get_hp() < 90 or self.get_mp() < 80:
                     self.recover_between_pulls()
             time.sleep(tick)
+
+    # ══════════════════════════════════════════════════════════════
+    #  ADDRESS SCAN  (runtime pointers — change every game launch)
+    # ══════════════════════════════════════════════════════════════
+
+    def get_player_address(self):
+        """PLAYER_ADDRESS: runtime pointer to LocalPlayerEntity as int."""
+        r = self._send("PLAYER_ADDRESS")
+        if not r or r == "0x0":
+            return 0
+        try:
+            return int(r, 16)
+        except ValueError:
+            return 0
+
+    def dump_singletons(self):
+        """DUMP_SINGLETONS: runtime addresses of all key game objects.
+        Returns dict {label: addr_int}. Addresses change every game launch."""
+        r = self._send("DUMP_SINGLETONS")
+        if not r or not r.strip():
+            return {}
+        result = {}
+        for pair in r.split("|"):
+            if "=" not in pair:
+                continue
+            label, addr_str = pair.split("=", 1)
+            try:
+                result[label.strip()] = int(addr_str.strip(), 16)
+            except ValueError:
+                pass
+        return result
+
+    def _parse_addr_entries(self, raw):
+        """Shared parser for SCENE_ADDRESSES / NEARBY_ADDRESSES responses."""
+        if not raw:
+            return []
+        parts = raw.split("###", 1)
+        body  = parts[1] if len(parts) > 1 else ""
+        results = []
+        for entry in body.split("###"):
+            entry = entry.strip()
+            if not entry:
+                continue
+            d = {}
+            for kv in entry.split("|"):
+                if "=" not in kv:
+                    continue
+                k, v = kv.split("=", 1)
+                k = k.strip(); v = v.strip()
+                if k == "ptr":
+                    try: d[k] = int(v, 16)
+                    except ValueError: d[k] = 0
+                elif k == "uid":
+                    try: d[k] = int(v)
+                    except ValueError: d[k] = 0
+                elif k in ("x", "y", "z"):
+                    try: d[k] = float(v)
+                    except ValueError: d[k] = 0.0
+                elif k in ("spawned", "hidden", "static"):
+                    d[k] = v == "1"
+                else:
+                    d[k] = v
+            if d:
+                results.append(d)
+        return results
+
+    def get_scene_addresses(self):
+        """SCENE_ADDRESSES: all EntityManager entities with raw ptr, IL2CPP class,
+        uid and position. Returns list of dicts with keys:
+          ptr(int), uid(int), class(str), name(str), x/y/z(float),
+          spawned/hidden/static(bool)."""
+        r = self._send("SCENE_ADDRESSES")
+        if not r or r in ("NO_ENTITIES", "NO_ENTITY_MANAGER", "IL2CPP_NOT_AVAILABLE"):
+            return []
+        return self._parse_addr_entries(r)
+
+    def get_nearby_addresses(self):
+        """NEARBY_ADDRESSES: NearbyEntities list with raw ptr, IL2CPP class, uid and pos.
+        Subset of scene. Same dict format as get_scene_addresses()."""
+        r = self._send("NEARBY_ADDRESSES")
+        if not r or r in ("NO_ENTITIES", "NO_PLAYER", "NO_NEARBY_WRAPPER",
+                          "BAD_NEARBY_LIST", "IL2CPP_NOT_AVAILABLE"):
+            return []
+        return self._parse_addr_entries(r)
+
+    def find_address_by_uid(self, uid):
+        """Convenience: look up a nearby entity's raw ptr by UID."""
+        for e in self.get_nearby_addresses():
+            if e.get("uid") == uid:
+                return e.get("ptr", 0)
+        return 0
 
     # ══════════════════════════════════════════════════════════════
     #  STATS
@@ -1603,7 +1940,7 @@ class EthyToolConnection:
             k, v = pair.split("=", 1)
             if k in ("name", "display", "cat", "job"): data[k] = v; continue
             NUMERIC_KEYS = ("uid", "stack", "rarity", "equip", "quality", "mana",
-                           "of", "cont", "max_hp", "max_mp", "dir", "idx")
+                           "of", "cont", "max_hp", "max_mp", "dir", "idx", "index")
             if v in ("0", "1") and k not in NUMERIC_KEYS:
                 data[k] = v == "1"; continue
             try: data[k] = int(v)
@@ -1615,3 +1952,164 @@ class EthyToolConnection:
 
 def create_connection(pid=None):
     return EthyToolConnection(pid=pid)
+
+
+# ══════════════════════════════════════════════════════════════
+#  ScreenReader — find images / read pixels on-screen
+# ══════════════════════════════════════════════════════════════
+
+class ScreenReader:
+    """
+    Lightweight screen-capture + template-matching helper.
+    Requires:  pip install opencv-python Pillow
+
+    By default captures the window of the process named in GAME_EXE.
+    Falls back to full virtual desktop (all monitors) if window not found.
+    """
+
+    GAME_EXE = "ethyrial"   # partial match against window title or process name
+
+    def __init__(self):
+        self._cv2       = None
+        self._np        = None
+        self._ImageGrab = None
+        self._win32gui  = None
+        self._ready     = False
+        self._game_hwnd = None
+        self._init()
+
+    def _init(self):
+        try:
+            import cv2, numpy as np
+            from PIL import ImageGrab
+            self._cv2        = cv2
+            self._np         = np
+            self._ImageGrab  = ImageGrab
+            self._ready      = True
+        except ImportError as e:
+            print(f"[ScreenReader] Missing dependency: {e}")
+            print("[ScreenReader] Run:  pip install opencv-python Pillow")
+            return
+        # Try to find the game window handle for targeted capture
+        try:
+            import win32gui
+            self._win32gui = win32gui
+            self._find_game_window()
+        except ImportError:
+            pass  # pywin32 not installed — will use all-monitor fallback
+
+    def _find_game_window(self):
+        """Find the game window by title and cache its HWND."""
+        if not self._win32gui:
+            return
+        found = []
+        def _cb(hwnd, _):
+            if self._win32gui.IsWindowVisible(hwnd):
+                title = self._win32gui.GetWindowText(hwnd).lower()
+                if self.GAME_EXE.lower() in title:
+                    found.append(hwnd)
+        self._win32gui.EnumWindows(_cb, None)
+        self._game_hwnd = found[0] if found else None
+
+    def _game_rect(self):
+        """Return (left, top, right, bottom) of the game window, or None."""
+        if not self._win32gui or not self._game_hwnd:
+            return None
+        try:
+            rect = self._win32gui.GetWindowRect(self._game_hwnd)
+            # rect = (left, top, right, bottom)
+            if rect[2] - rect[0] < 100:   # sanity check — minimized?
+                return None
+            return rect
+        except Exception:
+            return None
+
+    # ── screenshot helpers ──────────────────────────────────────
+
+    def screenshot(self, region=None):
+        """
+        Return a numpy BGR array of the screen.
+        - If region is given, crops to that box (absolute screen coords).
+        - If game window is found, captures just that window.
+        - Otherwise captures the full virtual desktop (all monitors).
+        """
+        if not self._ready:
+            return None
+        if region is None:
+            region = self._game_rect()   # use game window if available
+        # all_screens=True captures across all monitors (handles multi-monitor)
+        img = self._ImageGrab.grab(bbox=region, all_screens=True)
+        arr = self._np.array(img)
+        return self._cv2.cvtColor(arr, self._cv2.COLOR_RGB2BGR)
+
+    # ── template matching ───────────────────────────────────────
+
+    def find_image(self, template_path, threshold=0.75, region=None):
+        """
+        Search for *template_path* on screen.
+        Returns (cx, cy) center pixel coords on match, else None.
+        `region` = (left, top, right, bottom) to limit search area.
+        If region is None, automatically uses the game window rect.
+        """
+        if not self._ready:
+            return None
+        effective_region = region if region is not None else self._game_rect()
+        screen = self.screenshot(effective_region)
+        if screen is None:
+            return None
+        tmpl = self._cv2.imread(str(template_path), self._cv2.IMREAD_COLOR)
+        if tmpl is None:
+            print(f"[ScreenReader] Cannot load template: {template_path}")
+            return None
+        result = self._cv2.matchTemplate(screen, tmpl, self._cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = self._cv2.minMaxLoc(result)
+        if max_val >= threshold:
+            h, w = tmpl.shape[:2]
+            ox = effective_region[0] if effective_region else 0
+            oy = effective_region[1] if effective_region else 0
+            cx = ox + max_loc[0] + w // 2
+            cy = oy + max_loc[1] + h // 2
+            return (cx, cy, max_val)
+        return None
+
+    def find_any(self, template_paths, threshold=0.75, region=None):
+        """
+        Try multiple templates; return the best match above threshold.
+        Returns (cx, cy, confidence, path) or None.
+        """
+        best = None
+        for p in template_paths:
+            m = self.find_image(p, threshold=threshold, region=region)
+            if m and (best is None or m[2] > best[2]):
+                best = (m[0], m[1], m[2], p)
+        return best
+
+    def wait_for_image(self, template_paths, timeout=10.0, interval=0.25,
+                       threshold=0.75, region=None):
+        """
+        Poll until one of the templates appears on screen or timeout expires.
+        Returns match tuple or None on timeout.
+        """
+        if isinstance(template_paths, (str, Path)):
+            template_paths = [template_paths]
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            m = self.find_any(template_paths, threshold=threshold, region=region)
+            if m:
+                return m
+            time.sleep(interval)
+        return None
+
+    # ── pixel helpers ───────────────────────────────────────────
+
+    def get_pixel(self, x, y):
+        """Return (R, G, B) of a single screen pixel."""
+        if not self._ready:
+            return (0, 0, 0)
+        img = self._ImageGrab.grab(bbox=(x, y, x + 1, y + 1))
+        return img.getpixel((0, 0))[:3]
+
+    def pixel_matches(self, x, y, color, tolerance=15):
+        """True if pixel at (x,y) is within *tolerance* of *color* (R,G,B)."""
+        r, g, b = self.get_pixel(x, y)
+        return all(abs(a - c) <= tolerance for a, c in zip((r, g, b), color))

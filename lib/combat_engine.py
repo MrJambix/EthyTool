@@ -412,8 +412,6 @@ class CombatEngine:
         if self.conn.in_combat():
             self._set_state(CombatState.COMBAT)
             return
-        if self.conn.has_progress():
-            return
 
         hp, mp = self.conn.get_hp(), self.conn.get_mp()
 
