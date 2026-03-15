@@ -29,6 +29,14 @@ BUFFS = [
     "Bloom",                    # Buff on self or targeted ally (30s CD), no Seed of Silcress required
 ]
 
+# Don't cast if already active (detected via PLAYER_BUFFS)
+BUFF_CONFIG = {
+    "Bloom": {
+        "detect_buff": True,
+        "buff_ids": ["Bloom", "BloomStatus"],
+    },
+}
+
 OPENER = [
     "Bloom",
     "Ironbark",

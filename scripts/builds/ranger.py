@@ -11,7 +11,7 @@
 # Spiritualism discipline level required for each skill.
 # Attack and Recall Pet have no requirement (always usable).
 # Set your level here if the game doesn't expose it (e.g. SPIRITUALISM_LEVEL = 10).
-SPIRITUALISM_LEVEL = 5
+SPIRITUALISM_LEVEL = 10   # Spiritburst + Spiritlife Arrow unlocked
 
 SKILL_LEVEL_REQUIREMENTS = {
     "Spiritroot Arrow": 5,
@@ -24,7 +24,11 @@ SKILL_LEVEL_REQUIREMENTS = {
 }
 
 # Spells to skip — built from level (blocks Spiritbeast's Wrath until lv 20, etc.)
-IGNORED_SPELLS = {s for s, req in SKILL_LEVEL_REQUIREMENTS.items() if SPIRITUALISM_LEVEL < req}
+# Nature Arrows: toggle spell, not a rotation filler — ignore globally in ethytool_lib too
+# Summons: never auto-cast in combat
+IGNORED_SPELLS = {
+    s for s, req in SKILL_LEVEL_REQUIREMENTS.items() if SPIRITUALISM_LEVEL < req
+} | {"Nature Arrows", "Summon Spirit Alpha", "Summon Spirit Cub", "Summon Spirit Wolf"}
 
 HEAL_HP        = 70
 DEFENSIVE_HP   = 40
@@ -37,8 +41,15 @@ GCD       = 0.3
 
 BUFFS = [
     "Nature's Swiftness",        # Self buff (30s CD)
-    "Nature Arrows",             # Ammo/buff (0 CD, 1s cast)
 ]
+
+# Don't cast if already active (detected via PLAYER_BUFFS)
+BUFF_CONFIG = {
+    "Nature's Swiftness": {
+        "detect_buff": True,
+        "buff_ids": ["Nature's Swiftness", "NaturesSwiftness"],
+    },
+}
 
 PET_SPELLS = [
     "Attack",                     # Send pet to attack target (pull start)
@@ -48,22 +59,26 @@ PET_ROTATION = [
     "Spiritbeast's Wrath",        # Pet damage ability
 ]
 
+# Tried first every tick when ready — before pet, before rotation
+MANA_BUILDER_PRIORITY = [
+    "Spiritburst Arrow",          # Restores mana; use whenever off CD
+]
+
 OPENER = [
     "Nature's Swiftness",
-    "Nature Arrows",
+    "Spiritburst Arrow",         # Mana builder — use first
     "Spiritbeast's Wrath",
     "Spirit Shot",
 ]
 
 ROTATION = [
     "Spiritbeast's Wrath",       # Big hit (30s CD)
-    "Spiritburst Arrow",         # (12s CD, 1s cast)
     "Spiritroot Arrow",          # (16s CD)
     "Spirit Shot",               # (10s CD)
     "Spiritlife Arrow",          # CC/damage (10s CD)
     "Verdant Barrage",           # Short CD (4s, 0.5s cast)
-    "Nature Arrows",             # Filler (0 CD, 1s cast)
 ]
+# Spiritburst Arrow in MANA_BUILDER_PRIORITY — tried before this rotation
 
 HEAL_SPELLS = [
     "Linked Rejuvenation",      # Self heal (30s CD, 1s cast)
@@ -81,7 +96,6 @@ MEDITATION_MANA_PCT = 0
 SPELL_INFO = {
     "Attack": {"type": "damage", "cast_time": 0, "cooldown": 1, "mana_cost": 0, "range": 25},
     "Linked Rejuvenation": {"type": "heal", "cast_time": 1.0, "cooldown": 30, "mana_cost": 8, "range": 1, "targets_self": True},
-    "Nature Arrows": {"type": "buff", "cast_time": 1.0, "cooldown": 0, "mana_cost": 10, "range": 1, "targets_self": True},
     "Nature's Swiftness": {"type": "buff", "cast_time": 0, "cooldown": 30, "mana_cost": 10, "range": 0, "targets_self": True},
     "Recall Pet": {"type": "utility", "cast_time": 0, "cooldown": 1, "mana_cost": 0, "range": 25},
     "Rest": {"type": "utility", "cast_time": 0, "cooldown": 10, "mana_cost": 0, "range": 2, "channel_time": 20, "targets_self": True},

@@ -121,6 +121,7 @@ IGNORED_SPELLS = {
     "Leyline Meditation",
     "Rest",
     "Furious Charge",
+    "Nature Arrows",   # Ranger toggle — enables basic arrows; never spam in rotation
 }
 
 
@@ -1218,7 +1219,8 @@ class EthyToolConnection:
         return [s for s in spell_list if s in known]
 
     def get_class_spells(self):
-        return [s for s in self.get_spell_names() if s not in IGNORED_SPELLS]
+        return [s for s in self.get_spell_names()
+                if s not in IGNORED_SPELLS and not s.lower().startswith("summon ")]
 
     # ══════════════════════════════════════════════════════════════
     #  BUFFS & STACKS (from game)
@@ -1760,6 +1762,12 @@ class EthyToolConnection:
                 return False
             if not self.check_level_rules(name):
                 return False
+            # Self-buff: skip if already active (detected via PLAYER_BUFFS)
+            cfg = getattr(p, "BUFF_CONFIG", {}).get(name, {})
+            if cfg.get("detect_buff"):
+                buff_ids = cfg.get("buff_ids", [name])
+                if any(self.has_buff(bid) for bid in buff_ids):
+                    return False
 
         if name == "Attack":
             if not self.has_target():
@@ -1884,6 +1892,12 @@ class EthyToolConnection:
         stacks = 0
         hp_pct = self.get_hp_pct()
 
+        # Mana builders first — cast before pet/rotation when ready
+        mana_builders = getattr(p, "MANA_BUILDER_PRIORITY", [])
+        for name in mana_builders:
+            if name not in IGNORED_SPELLS and self.try_cast(name):
+                return True
+
         if getattr(p, "STACK_ENABLED", False):
             stacks = self.get_fury_stacks()
 
@@ -1896,6 +1910,17 @@ class EthyToolConnection:
         for name in pet_rotation:
             if name not in IGNORED_SPELLS and self.try_cast(name):
                 return True
+
+        # AOE when threshold met and build has AOE_SPELLS
+        aoe_thresh = getattr(p, "AOE_THRESHOLD", 3)
+        aoe_spells = getattr(p, "AOE_SPELLS", [])
+        try:
+            if aoe_spells and self.get_enemy_count(10) >= aoe_thresh:
+                for name in aoe_spells:
+                    if name not in IGNORED_SPELLS and self.try_cast(name):
+                        return True
+        except Exception:
+            pass
 
         rotation = getattr(p, "ROTATION", [])
         for name in rotation:
@@ -1984,6 +2009,15 @@ class EthyToolConnection:
         for name, data in getattr(p, "SPELL_INFO", {}).items():
             if data.get("type") == "nuke" and self._state.stacks >= data.get("min_stacks", 1):
                 return self.try_cast(name)
+        return False
+
+    def do_kite(self):
+        """Try KITE_SPELLS from build when kiting."""
+        p = self.load_profile()
+        if not p: return False
+        for name in getattr(p, "KITE_SPELLS", []):
+            if name not in IGNORED_SPELLS and self.try_cast(name):
+                return True
         return False
 
     def do_defend(self):

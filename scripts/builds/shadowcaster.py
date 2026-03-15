@@ -32,6 +32,18 @@ BUFFS = [
     "Embrace Shadow",            # Shadow power buff (30s CD)
 ]
 
+# Don't cast if already active (detected via PLAYER_BUFFS)
+BUFF_CONFIG = {
+    "Shadow Armor": {
+        "detect_buff": True,
+        "buff_ids": ["Shadow Armor", "ShadowArmor"],
+    },
+    "Embrace Shadow": {
+        "detect_buff": True,
+        "buff_ids": ["Embrace Shadow", "EmbraceShadow"],
+    },
+}
+
 OPENER = [
     "Shadow Armor",
     "Embrace Shadow",
