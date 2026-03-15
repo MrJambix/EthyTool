@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pyo
+*.log
+scripts/sessions/*.json
+scripts/dumps/dumps/*.txt
+scripts/dumps/*.json
+scripts/dumps/*.txt
+debug-*.log

@@ -10,6 +10,18 @@ A modding and scripting toolkit for Ethyrial: Echoes of Yore. Read game data, in
 
 ---
 
+## TODO
+
+- [ ] Review/fix pipe diagnostic (`check_pipe_block.bat`) if needed
+- [ ] Improve or extend `auto_gather.py` template
+- [ ] Update/maintain dump scripts (spells, doodad, monster codex)
+- [ ] Add or refine EthyTool features
+- [ ] Documentation / README updates
+- [ ] Interrupt (combat/interrupt handling)
+- [ ] Target skills
+
+---
+
 ## Key Required
 
 **A key is required to use EthyTool.** On first launch you will be prompted to enter your key. Reach out to **MrJambix** on Discord for a key.
@@ -22,6 +34,7 @@ Keys are validated locally inside the EXE — no internet connection or server r
 
 - **Windows 10/11**
 - **Python 3.10+** — [Download here](https://www.python.org/downloads/)
+  - Use the **classic executable installer** — **do not use the new Python Installation Manager** (Store/WinGet). The new installer can cause compatibility issues.
   - During install, check **"Add Python to PATH"**
 - **Ethyrial: Echoes of Yore**
 
@@ -31,8 +44,10 @@ Keys are validated locally inside the EXE — no internet connection or server r
 
 1. Download the latest release
 2. Extract to any folder
-3. Install Python if you haven't already
-4. Install dependencies:
+3. **Run `install_all.bat`** (right-click → Run as administrator) — installs VC++ Redist, Defender exclusion, firewall rules, and optional Python packages
+4. Or install manually:
+   - Install Python if you haven't already (classic installer only)
+   - Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
@@ -308,19 +323,23 @@ pip install -r requirements.txt
 EthyTool/
 ├── EthyTool.exe              run this
 ├── EthyTool.dll              auto-injected
+├── install_all.bat           full setup (VC++, Defender, firewall, deps)
+├── install_firewall.ps1       used by install_all.bat
+├── check_pipe_block.bat      pipe diagnostic if connection fails
 ├── server_config.yaml        token list (keys validated locally)
 ├── requirements.txt          Python dependencies
 ├── lib/
 │   ├── ethytool_lib.py       low-level API + ScreenReader
 │   └── ethytool_wraps.py     simple API
 ├── scripts/                  your scripts go here
-│   ├── combat.py
-│   ├── harvest.py
-│   ├── auto_loot.py
+│   ├── auto_rotation.py
 │   ├── dps_dashboard.py      live DPS charts
-│   └── rotations/
-│       ├── template.py       copy and rename for your class
-│       └── ...
+│   ├── loot_all.py
+│   ├── builds/               class rotations
+│   ├── debugs/               debug utilities
+│   ├── dumps/                dump scripts (spells, doodads, etc.)
+│   ├── templates/            auto_gather, auto_farm, etc.
+│   └── plugins/
 └── docs/
     ├── WRAPS.md              wraps reference
     ├── COMMANDS.md           raw DLL commands

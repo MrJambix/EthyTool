@@ -9,7 +9,7 @@
 """
 
 # Spiritualism discipline level required for each skill.
-# Attack and Recall Pet have no requirement (always usable).
+# Attack has no requirement (always usable).
 # Set your level here if the game doesn't expose it (e.g. SPIRITUALISM_LEVEL = 10).
 SPIRITUALISM_LEVEL = 10   # Spiritburst + Spiritlife Arrow unlocked
 
@@ -97,7 +97,6 @@ SPELL_INFO = {
     "Attack": {"type": "damage", "cast_time": 0, "cooldown": 1, "mana_cost": 0, "range": 25},
     "Linked Rejuvenation": {"type": "heal", "cast_time": 1.0, "cooldown": 30, "mana_cost": 8, "range": 1, "targets_self": True},
     "Nature's Swiftness": {"type": "buff", "cast_time": 0, "cooldown": 30, "mana_cost": 10, "range": 0, "targets_self": True},
-    "Recall Pet": {"type": "utility", "cast_time": 0, "cooldown": 1, "mana_cost": 0, "range": 25},
     "Rest": {"type": "utility", "cast_time": 0, "cooldown": 10, "mana_cost": 0, "range": 2, "channel_time": 20, "targets_self": True},
     "Spirit Shot": {"type": "damage", "cast_time": 0, "cooldown": 10, "mana_cost": 5, "range": 12},
     "Spiritbeast's Wrath": {"type": "damage", "cast_time": 0, "cooldown": 30, "mana_cost": 6, "range": 12},
